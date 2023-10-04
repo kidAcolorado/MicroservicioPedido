@@ -9,6 +9,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+
 import com.viewnext.kidaprojects.microservicepedido.exception.StockInsuficienteException;
 import com.viewnext.kidaprojects.microservicepedido.exception.UnknownErrorException;
 import com.viewnext.kidaprojects.microservicepedido.model.Pedido;
@@ -63,31 +65,36 @@ public class PedidoServiceImpl implements PedidoService{
 	 * @param cantidad  La cantidad de stock que se va a agregar o restar al producto.
 	 * @throws StockInsuficienteException Si la actualización del stock resulta en una cantidad insuficiente.
 	 * @throws EntityNotFoundException   Si no se encuentra el producto en el sistema.
+	 * @throws UnknownErrorException     Si ocurre un error desconocido durante la actualización del stock.
 	 */
-	private void updateStock(int codigo, int cantidad) throws StockInsuficienteException, EntityNotFoundException{
-	    ResponseEntity<Void> response = pedidoWebClient.put()
+	private void updateStock(int codigo, int cantidad) throws StockInsuficienteException, EntityNotFoundException, UnknownErrorException {
+	    try {
+	        // Realizar la solicitud HTTP
+	        pedidoWebClient.put()
 	            .uri(uriBuilder -> uriBuilder
-	                    .path("/producto")
-	                    .queryParam("codigo", codigo)
-	                    .queryParam("cantidad", cantidad)
-	                    .build())
+	                .path("/producto")
+	                .queryParam("codigo", codigo)
+	                .queryParam("cantidad", cantidad)
+	                .build())
 	            .retrieve()
 	            .toBodilessEntity()
 	            .block();
 
-	    if(response!=null) {
+	        // No es necesario verificar el código de estado aquí
 
-		    if (response.getStatusCode() == HttpStatus.CONFLICT) {
-		        throw new StockInsuficienteException();
-		    }
-
-		    if (response.getStatusCode() == HttpStatus.NOT_FOUND) {
-		        throw new EntityNotFoundException();
-		    }
+	    } catch (WebClientResponseException e) {
+	        // Manejar excepciones de WebClientResponseException
+	        if (e.getStatusCode() == HttpStatus.CONFLICT) {
+	            throw new StockInsuficienteException();
+	        } else if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+	            throw new EntityNotFoundException();
+	        } else {
+	            // Manejar otros códigos de estado o excepciones si es necesario
+	            throw new UnknownErrorException();
+	        }
 	    }
 	}
 
-	
 	/**
 	 * Obtiene el precio de un producto a través de una solicitud HTTP GET a un servicio externo.
 	 *
@@ -96,26 +103,22 @@ public class PedidoServiceImpl implements PedidoService{
 	 * @throws EntityNotFoundException Si el producto no se encuentra en el sistema.
 	 * @throws UnknownErrorException  Si ocurre un error desconocido al obtener el precio.
 	 */
-	private double obtenerPrecio(int codigo) throws EntityNotFoundException, UnknownErrorException{
-	    ResponseEntity<Double> respuestaPrecio = pedidoWebClient.get()
-	            .uri("/producto/precio/{codigo}", codigo)
-	            .retrieve()
-	            .toEntity(Double.class)
-	            .block();
-	    
-	   if(respuestaPrecio!=null) {
-		   if (respuestaPrecio.getStatusCode().is2xxSuccessful()) {
-		        return respuestaPrecio.getBody();
-		    }
+	private double obtenerPrecio(int codigo) throws EntityNotFoundException, UnknownErrorException {
+	    try {
+	        ResponseEntity<Double> respuestaPrecio = pedidoWebClient.get()
+	                .uri("/producto/precio/{codigo}", codigo)
+	                .retrieve()
+	                .toEntity(Double.class)
+	                .block();
 
-		    if (respuestaPrecio.getStatusCode() == HttpStatus.NOT_FOUND) {
-		        throw new EntityNotFoundException();
-		    }
-	   }
+	        return respuestaPrecio.getBody();
 
-	    
-
-	    throw new UnknownErrorException();
+	    } catch (WebClientResponseException e) {
+	        if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+	            throw new EntityNotFoundException();
+	        }
+	        throw new UnknownErrorException();
+	    }
 	}
 
 	/**
@@ -132,84 +135,20 @@ public class PedidoServiceImpl implements PedidoService{
 	@Transactional
 	@Override
 	public Pedido darDeAltaPedido(int codigo, int cantidad) throws StockInsuficienteException, EntityNotFoundException, UnknownErrorException{
-		
-			try {
-				
-				updateStock(codigo, cantidad);
-				
-				double precio = obtenerPrecio(codigo);
-				
-				
-				Pedido pedido = new Pedido();
-				pedido.setCodigo(codigo);
-				pedido.setUnidades(cantidad);
-				pedido.setTotal(cantidad * precio);
-				pedido.setFecha(LocalDateTime.now());
-				
-				
-				
-				return pedidoRepository.save(pedido);
-				
-			} catch (StockInsuficienteException e) {
-				throw new StockInsuficienteException();
-			} catch(EntityNotFoundException e) {
-				throw new EntityNotFoundException();
-			} catch (UnknownErrorException e) {
-				throw new UnknownErrorException();
-			}
-		
+	    updateStock(codigo, cantidad);
+	    double precio = obtenerPrecio(codigo);
+	    
+	    Pedido pedido = new Pedido();
+	    pedido.setCodigo(codigo);
+	    pedido.setUnidades(cantidad);
+	    pedido.setTotal(cantidad * precio);
+	    pedido.setFecha(LocalDateTime.now());
+	    
+	    return pedidoRepository.save(pedido);
 	}
+
 	
 	
-	// Metodo que realicé la primera vez pero después descompuse en varios para una mejor lectura
-	@Transactional
-	public Pedido darDeAltaPedidoTest(int codigo, int cantidad) {
-		ResponseEntity<Void> responseEntity = pedidoWebClient.put()
-			.uri(uriBuilder -> uriBuilder
-					.path("/producto")
-					.queryParam("codigo", codigo)
-					.queryParam("cantidad", cantidad)
-					.build())
-			.retrieve()
-			.toBodilessEntity()
-			.block();
-		
-		if (responseEntity.getStatusCode() == HttpStatus.CONFLICT) {
-		    throw new StockInsuficienteException();
-			
-		}
-		if (responseEntity.getStatusCode() == HttpStatus.NOT_FOUND) {
-		    throw new EntityNotFoundException();
-		}
-		
-		if (responseEntity.getStatusCode().is2xxSuccessful()) {
-		    ResponseEntity<Double> respuestaPrecio = pedidoWebClient.get()
-		    		.uri("/producto/precio/{codigo}", codigo)
-		    		.retrieve()
-		    		.toEntity(Double.class)
-		    		.block();
-		    		
-		    	if(respuestaPrecio.getStatusCode() == HttpStatus.NOT_FOUND) {
-				    throw new EntityNotFoundException();
-				}
-		    	
-		    	if(respuestaPrecio.getStatusCode().is2xxSuccessful()) {
-		    		Pedido pedido = new Pedido();
-		    		double precio = respuestaPrecio.getBody();
-		    				    		
-		    		pedido.setCodigo(codigo);
-		    		pedido.setUnidades(cantidad);
-		    		pedido.setTotal(cantidad * precio);
-		    		pedido.setFecha(LocalDateTime.now());
-		    		
-		    		return pedido;
-		    	}
-		  	
-			
-		}
-		
-		throw new UnknownErrorException(); 
-				
-	}
+	
 
 }
